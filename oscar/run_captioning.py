@@ -39,8 +39,7 @@ class SMILESCaptionDataset(Dataset):
         #self.label_file = find_file_path_in_yaml(self.cfg['label'], self.root)
         self.feat_file = self.cfg['feature']
         self.caption_file = find_file_path_in_yaml(self.cfg.get('caption'), self.root)
-        self.img_feats = torch.load(self.feat_file)
-        self.smiles = json.load(self.caption_file)
+        self.img_feats, self.smiles = self.load_img_feats_and_smiles(self.cfg['features'], self.cfg['smiles'])
         self.tokenizer = tokenizer
         self.tensorizer = CaptionTensorizer(self.tokenizer, max_img_seq_length,
                 max_seq_length, max_seq_a_length, mask_prob, max_masked_tokens,
@@ -60,7 +59,18 @@ class SMILESCaptionDataset(Dataset):
 
     def __len__(self):
         return len(self.img_feats.keys())
-
+    
+    def load_img_feats_and_smiles(self, feat_file, smiles_file):
+        img_feats_dict = torch.load(feat_file)
+        smiles_file = json.load(smiles_file)
+        filtered_smiles = {}
+        filtered_img_feats = {}
+        for k in filtered_smiles.keys():
+            if img_feats_dict[k]:
+                filtered_smiles[k] = smiles_file[k]
+                filtered_img_feats[k] = img_feats_dict[k]
+        assert len(filtered_img_feats.keys()) == len(filtered_smiles.keys())
+        return filtered_img_feats, filtered_smiles
 
 class CaptionTSVDataset(Dataset):
     def __init__(self, yaml_file, tokenizer=None, add_od_labels=True,
@@ -992,7 +1002,7 @@ def main():
             config.output_hidden_states = True
         # tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name \
         #         else args.model_name_or_path, do_lower_case=args.do_lower_case)
-        tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name)
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
         # tokenizer = BasicSmilesTokenizer()
         config.img_feature_dim = args.img_feature_dim
         config.img_feature_type = args.img_feature_type
