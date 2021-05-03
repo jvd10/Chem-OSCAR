@@ -25,6 +25,42 @@ from oscar.modeling.modeling_bert import BertForImageCaptioning
 from transformers.pytorch_transformers import BertTokenizer, BertConfig
 from transformers.pytorch_transformers import AdamW, WarmupLinearSchedule, WarmupConstantSchedule
 
+# from deepchem.feat.smiles_tokenizer import BasicSmilesTokenizer
+
+from transformers import AutoTokenizer
+
+class SMILESCaptionDataset(Dataset):
+    def __init__(self, yaml_file, tokenizer=None, add_od_labels=False,
+            max_img_seq_length=50, max_seq_length=70, max_seq_a_length=40, 
+            is_train=True, mask_prob=0.15, max_masked_tokens=3, **kwargs):
+        self.yaml_file = yaml_file
+        self.cfg = load_from_yaml_file(yaml_file)
+        self.root = op.dirname(yaml_file)
+        #self.label_file = find_file_path_in_yaml(self.cfg['label'], self.root)
+        self.feat_file = self.cfg['feature']
+        self.caption_file = find_file_path_in_yaml(self.cfg.get('caption'), self.root)
+        self.img_feats = torch.load(self.feat_file)
+        self.smiles = json.load(self.caption_file)
+        self.tokenizer = tokenizer
+        self.tensorizer = CaptionTensorizer(self.tokenizer, max_img_seq_length,
+                max_seq_length, max_seq_a_length, mask_prob, max_masked_tokens,
+                is_train=is_train)
+        self.is_train = is_train
+
+    def __getitem__(self, idx):
+        if self.is_train:
+            caption_idx = f'train_{idx}'
+        else:
+            caption_idx = f'val_{idx}'
+        caption = self.smiles[caption_idx]
+        features = self.img_feats[str(idx)]
+        od_labels = None
+        example = self.tensorizer.tensorize_example(caption, features, text_b=od_labels)
+        return str(idx), example
+
+    def __len__(self):
+        return len(self.img_feats.keys())
+
 
 class CaptionTSVDataset(Dataset):
     def __init__(self, yaml_file, tokenizer=None, add_od_labels=True,
@@ -286,8 +322,12 @@ class CaptionTensorizer(object):
         # image features
         img_len = img_feat.shape[0]
         if img_len > self.max_img_seq_len:
-            img_feat = img_feat[0 : self.max_img_seq_len, ]
+            indice = random.sample(range(img_len), self.max_img_seq_len)
+            indice = torch.tensor(indice)
+            img_feat = img_feat[indice]
+            #img_feat = img_feat[0 : self.max_img_seq_len, ]
             img_len = img_feat.shape[0]
+            assert img_len == self.max_img_seq_len
         else:
             padding_matrix = torch.zeros((self.max_img_seq_len - img_len,
                                           img_feat.shape[1]))
@@ -818,7 +858,7 @@ def main():
                         help="Loss function types: support kl, x2, sfmx")
     parser.add_argument("--config_name", default="", type=str, 
                         help="Pretrained config name or path if not the same as model_name.")
-    parser.add_argument("--tokenizer_name", default="", type=str, 
+    parser.add_argument("--tokenizer_name", default="seyonec/ChemBERTa-zinc-base-v1", type=str, 
                         help="Pretrained tokenizer name or path if not the same as model_name.")
     parser.add_argument("--max_seq_length", default=70, type=int,
                         help="The maximum total input sequence length after tokenization. "
@@ -835,12 +875,12 @@ def main():
                         help= "Probability to mask input sentence during training.")
     parser.add_argument("--max_masked_tokens", type=int, default=3,
                         help="The max number of masked tokens per sentence.")
-    parser.add_argument("--add_od_labels", default=False, action='store_true', 
+    parser.add_argument("--add_od_labels", default=False, action='store_false', 
                         help="Whether to add object detection labels or not")
     parser.add_argument("--drop_out", default=0.1, type=float, help="Drop out in BERT.")
     parser.add_argument("--max_img_seq_length", default=50, type=int, 
                         help="The maximum total input image sequence length.")
-    parser.add_argument("--img_feature_dim", default=2054, type=int, 
+    parser.add_argument("--img_feature_dim", default=1024, type=int, 
                         help="The Image Feature Dimension.")
     parser.add_argument("--img_feature_type", default='frcnn', type=str,
                         help="Image feature type.")
@@ -950,8 +990,10 @@ def main():
         if args.scst:
             # avoid using too much memory
             config.output_hidden_states = True
-        tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name \
-                else args.model_name_or_path, do_lower_case=args.do_lower_case)
+        # tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name \
+        #         else args.model_name_or_path, do_lower_case=args.do_lower_case)
+        tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name)
+        # tokenizer = BasicSmilesTokenizer()
         config.img_feature_dim = args.img_feature_dim
         config.img_feature_type = args.img_feature_type
         config.hidden_dropout_prob = args.drop_out

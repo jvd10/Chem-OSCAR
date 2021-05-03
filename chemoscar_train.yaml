@@ -1,0 +1,2 @@
+feature: data/train_img_feats.pt
+captions: data/train_img_smiles.json
