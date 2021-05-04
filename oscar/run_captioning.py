@@ -55,7 +55,7 @@ class SMILESCaptionDataset(Dataset):
         features = self.img_feats[str(idx)]
         od_labels = None
         example = self.tensorizer.tensorize_example(caption, features, text_b=od_labels)
-        return str(idx), example
+        return caption_idx, example
 
     def __len__(self):
         return len(self.img_feats.keys())
