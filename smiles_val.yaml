@@ -1,0 +1,2 @@
+features: smiles_data/val_img_feats.pt
+smiles: smiles_data/smiles_json_10000.json

@@ -7,26 +7,38 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss, MSELoss
-from transformers.pytorch_transformers.modeling_bert import (BertEmbeddings, 
+# from transformers.pytorch_transformers.modeling_bert import (BertEmbeddings, 
+#         BertSelfAttention, BertAttention, BertEncoder, BertLayer, 
+#         BertSelfOutput, BertIntermediate, BertOutput,
+#         BertPooler, BertLayerNorm, BertPreTrainedModel,
+# 		BertPredictionHeadTransform, BertOnlyMLMHead, BertLMPredictionHead,
+#         BertConfig, BERT_PRETRAINED_MODEL_ARCHIVE_MAP,
+#         load_tf_weights_in_bert)
+from pytorch_transformers.modeling_bert import (BertEmbeddings, 
         BertSelfAttention, BertAttention, BertEncoder, BertLayer, 
         BertSelfOutput, BertIntermediate, BertOutput,
         BertPooler, BertLayerNorm, BertPreTrainedModel,
 		BertPredictionHeadTransform, BertOnlyMLMHead, BertLMPredictionHead,
         BertConfig, BERT_PRETRAINED_MODEL_ARCHIVE_MAP,
         load_tf_weights_in_bert)
+from pytorch_transformers.modeling_roberta import *
+from transformers.models.roberta.modeling_roberta import RobertaSelfAttention, RobertaAttention, RobertaEncoder, RobertaLayer, RobertaPooler, RobertaPreTrainedModel
 from .modeling_utils import CaptionPreTrainedModel, ImgPreTrainedModel
 from ..utils.cbs import ConstrainedBeamSearch, select_best_beam_with_constraints
+from rdkit import Chem,DataStructs
 
 logger = logging.getLogger(__name__)
 
 
-class CaptionBertSelfAttention(BertSelfAttention):
+#class CaptionBertSelfAttention(BertSelfAttention):
+class CaptionBertSelfAttention(RobertaSelfAttention):
     """
     Modified from BertSelfAttention to add support for output_hidden_states.
     """
     def __init__(self, config):
         super(CaptionBertSelfAttention, self).__init__(config)
-
+        self.output_attentions = False
+        
     def forward(self, hidden_states, attention_mask, head_mask=None,
             history_state=None):
         if history_state is not None:
@@ -70,7 +82,8 @@ class CaptionBertSelfAttention(BertSelfAttention):
         return outputs
 
 
-class CaptionBertAttention(BertAttention):
+#class CaptionBertAttention(BertAttention):
+class CaptionBertAttention(RobertaAttention):
     """
     Modified from BertAttention to add support for output_hidden_states.
     """
@@ -87,7 +100,9 @@ class CaptionBertAttention(BertAttention):
         return outputs
 
 
-class CaptionBertEncoder(BertEncoder):
+#class CaptionBertEncoder(BertEncoder):
+class CaptionBertEncoder(RobertaEncoder):
+
     """
     Modified from BertEncoder to add support for output_hidden_states.
     """
@@ -126,7 +141,8 @@ class CaptionBertEncoder(BertEncoder):
         return outputs  # outputs, (hidden states), (attentions)
 
 
-class CaptionBertLayer(BertLayer):
+#class CaptionBertLayer(BertLayer):
+class CaptionBertLayer(RobertaLayer):
     """
     Modified from BertLayer to add support for output_hidden_states.
     """
@@ -147,14 +163,18 @@ class CaptionBertLayer(BertLayer):
         return outputs
 
 
-class BertImgModel(BertPreTrainedModel):
+#class BertImgModel(BertPreTrainedModel):
+class BertImgModel(RobertaPreTrainedModel):
     """ Expand from BertModel to handle image region features as input
     """
     def __init__(self, config):
+        #print(type(config).__name__)
         super(BertImgModel, self).__init__(config)
-        self.embeddings = BertEmbeddings(config)
+        #self.embeddings = BertEmbeddings(config)
+        self.embeddings = RobertaEmbeddings(config)
         self.encoder = CaptionBertEncoder(config)
-        self.pooler = BertPooler(config)
+        #self.pooler = BertPooler(config)
+        self.pooler = RobertaPooler(config)
 
         self.img_dim = config.img_feature_dim
         logger.info('BertImgModel Image Dimension: {}'.format(self.img_dim))
@@ -180,7 +200,8 @@ class BertImgModel(BertPreTrainedModel):
             if self.use_img_layernorm:
                 self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.img_layer_norm_eps)
 
-        self.apply(self.init_weights)
+        #self.apply(self.init_weights)
+        self.init_weights()
 
     def _resize_token_embeddings(self, new_num_tokens):
         old_embeddings = self.embeddings.word_embeddings
@@ -583,6 +604,8 @@ class BertCaptioningLoss(nn.Module):
         self.iter = 0
 
     def forward(self, logits, target):
+        #print(f'logits.shape is {logits.shape}')
+        #print(f'target.shape is {target.shape}')
         self.iter += 1
         eps = self.label_smoothing
         n_class = logits.size(1)
@@ -612,7 +635,8 @@ class BertForImageCaptioning(CaptionPreTrainedModel):
         self.cls = BertOnlyMLMHead(config)
         self.loss = BertCaptioningLoss(config)
 
-        self.apply(self.init_weights)
+        #self.apply(self.init_weights)
+        self.init_weights()
         self.tie_weights()
 
     def tie_weights(self):
@@ -644,8 +668,11 @@ class BertForImageCaptioning(CaptionPreTrainedModel):
             sequence_output = outputs[0][:, :masked_pos.shape[-1], :]
             # num_masks_in_batch * hidden_size
             sequence_output_masked = sequence_output[masked_pos==1, :]
+            #print(f'sequence_output_masked.shape is {sequence_output_masked.shape}')
             class_logits = self.cls(sequence_output_masked)
-            masked_ids = masked_ids[masked_ids != 0]   # remove padding masks
+            #print(f'class_logits.shape is {class_logits.shape}')
+            masked_ids = masked_ids[masked_ids != 1]   # remove padding masks
+            #masked_ids = masked_ids[masked_ids != 0]
             masked_loss = self.loss(class_logits.float(), masked_ids)
             outputs = (masked_loss, class_logits,) + outputs[2:]
         else:
@@ -785,12 +812,12 @@ class BertForImageCaptioning(CaptionPreTrainedModel):
         self.num_keep_best = num_keep_best
 
         vocab_size = self.config.vocab_size
-        if not use_cbs:
-            num_fsm_states = 1
-        else:
-            b, num_fsm_states, f1, v = fsm.shape
-            assert b==batch_size and v==vocab_size and f1==num_fsm_states
-
+        # if not use_cbs:
+        #     num_fsm_states = 1
+        # else:
+        #     b, num_fsm_states, f1, v = fsm.shape
+        #     assert b==batch_size and v==vocab_size and f1==num_fsm_states
+        num_fsm_states = 1
         self.add_od_labels = add_od_labels
         # avoid position_ids collision of caption and od labels
         self.od_labels_start_posid = max(od_labels_start_posid, self.max_seq_len)
@@ -803,6 +830,9 @@ class BertForImageCaptioning(CaptionPreTrainedModel):
         else:
             self.od_labels_len = 0
             od_label_ids = None
+            # print(f"input_ids.shape is {input_ids.shape}.")
+            # print(f"batch_size is {batch_size}")
+            # print(f"self.max_seq_len is {self.max_seq_len}")
             assert input_ids.shape == (batch_size, self.max_seq_len)
             input_ids = None
 

@@ -7,24 +7,35 @@ import logging
 import torch
 import torch.nn.functional as F
 
-from transformers.pytorch_transformers.modeling_bert import (BertConfig,
+# from transformers.pytorch_transformers.modeling_bert import (BertConfig,
+#         load_tf_weights_in_bert, BERT_PRETRAINED_MODEL_ARCHIVE_MAP,
+#         BertPreTrainedModel)
+# from transformers.pytorch_transformers.modeling_utils import (PreTrainedModel,
+#     WEIGHTS_NAME, TF_WEIGHTS_NAME)
+# from transformers.pytorch_transformers.file_utils import cached_path
+from pytorch_transformers.modeling_bert import (BertConfig,
         load_tf_weights_in_bert, BERT_PRETRAINED_MODEL_ARCHIVE_MAP,
         BertPreTrainedModel)
-from transformers.pytorch_transformers.modeling_utils import (PreTrainedModel,
+from pytorch_transformers.modeling_utils import (PreTrainedModel,
     WEIGHTS_NAME, TF_WEIGHTS_NAME)
-from transformers.pytorch_transformers.file_utils import cached_path
-
-
+from pytorch_transformers.file_utils import cached_path
+from pytorch_transformers.modeling_roberta import *
+from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel
 logger = logging.getLogger()
 
 
-class CaptionPreTrainedModel(BertPreTrainedModel):
+#class CaptionPreTrainedModel(BertPreTrainedModel):
+class CaptionPreTrainedModel(RobertaPreTrainedModel):
     """ Expand base class for image captioning modeling.
     """
-    config_class = BertConfig
-    pretrained_model_archive_map = BERT_PRETRAINED_MODEL_ARCHIVE_MAP
+    # config_class = BertConfig
+    # pretrained_model_archive_map = BERT_PRETRAINED_MODEL_ARCHIVE_MAP
+    # load_tf_weights = load_tf_weights_in_bert
+    # base_model_prefix = 'bert'
+    config_class = RobertaConfig
+    pretrained_model_archive_map = ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
     load_tf_weights = load_tf_weights_in_bert
-    base_model_prefix = 'bert'
+    base_model_prefix = "roberta"
 
     def __init__(self, config, *inputs, **kwargs):
         super(CaptionPreTrainedModel, self).__init__(config, *inputs, **kwargs)

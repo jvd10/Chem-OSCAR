@@ -17,42 +17,52 @@ from oscar.utils.tsv_file_ops import (tsv_writer, concat_tsv_files,
         delete_tsv_files, reorder_tsv_keys)
 from oscar.utils.misc import (mkdir, set_seed, 
         load_from_yaml_file, find_file_path_in_yaml)
-from oscar.utils.caption_evaluate import (evaluate_on_coco_caption,
-        ScstRewardCriterion)
+# from oscar.utils.caption_evaluate import (evaluate_on_coco_caption,
+#         ScstRewardCriterion)
 from oscar.utils.cbs import ConstraintFilter, ConstraintBoxesReader
 from oscar.utils.cbs import FiniteStateMachineBuilder
 from oscar.modeling.modeling_bert import BertForImageCaptioning
-from transformers.pytorch_transformers import BertTokenizer, BertConfig
-from transformers.pytorch_transformers import AdamW, WarmupLinearSchedule, WarmupConstantSchedule
-
+# from transformers.pytorch_transformers import BertTokenizer, BertConfig
+# from transformers.pytorch_transformers import AdamW, WarmupLinearSchedule, WarmupConstantSchedule
+from pytorch_transformers import BertTokenizer, BertConfig
+from pytorch_transformers import AdamW, WarmupLinearSchedule, WarmupConstantSchedule
 # from deepchem.feat.smiles_tokenizer import BasicSmilesTokenizer
 
-from transformers import AutoTokenizer
-
+from transformers import AutoTokenizer, AutoConfig, AutoModel
+import textdistance
+from nltk.translate.bleu_score import sentence_bleu
 class SMILESCaptionDataset(Dataset):
     def __init__(self, yaml_file, tokenizer=None, add_od_labels=False,
-            max_img_seq_length=50, max_seq_length=70, max_seq_a_length=40, 
+            max_img_seq_length=50, max_seq_length=150, max_seq_a_length=40, 
             is_train=True, mask_prob=0.15, max_masked_tokens=3, **kwargs):
         self.yaml_file = yaml_file
         self.cfg = load_from_yaml_file(yaml_file)
         self.root = op.dirname(yaml_file)
         #self.label_file = find_file_path_in_yaml(self.cfg['label'], self.root)
-        self.feat_file = self.cfg['feature']
-        self.caption_file = find_file_path_in_yaml(self.cfg.get('caption'), self.root)
-        self.img_feats, self.smiles = self.load_img_feats_and_smiles(self.cfg['features'], self.cfg['smiles'])
+        self.feat_file = self.cfg['features']
+        self.caption_file = find_file_path_in_yaml(self.cfg.get('smiles'), self.root)
+        self.img_feats, self.smiles = self.load_img_feats_and_smiles(self.feat_file, self.caption_file)
         self.tokenizer = tokenizer
         self.tensorizer = CaptionTensorizer(self.tokenizer, max_img_seq_length,
                 max_seq_length, max_seq_a_length, mask_prob, max_masked_tokens,
                 is_train=is_train)
         self.is_train = is_train
+        
+        self.mode = None
+        idx0 = 'train'
+        idx1 = 'val'
+        idx2 = 'test'
+        for i in [idx0, idx1, idx2]:
+            tr = f'{i}_0.png'
+            if tr in self.smiles.keys():
+                self.mode = i
+                break
+        
 
     def __getitem__(self, idx):
-        if self.is_train:
-            caption_idx = f'train_{idx}'
-        else:
-            caption_idx = f'val_{idx}'
+        caption_idx = f'{self.mode}_{idx}.png'
         caption = self.smiles[caption_idx]
-        features = self.img_feats[str(idx)]
+        features = torch.tensor(self.img_feats[caption_idx])
         od_labels = None
         example = self.tensorizer.tensorize_example(caption, features, text_b=od_labels)
         return caption_idx, example
@@ -62,15 +72,19 @@ class SMILESCaptionDataset(Dataset):
     
     def load_img_feats_and_smiles(self, feat_file, smiles_file):
         img_feats_dict = torch.load(feat_file)
-        smiles_file = json.load(smiles_file)
-        filtered_smiles = {}
-        filtered_img_feats = {}
-        for k in filtered_smiles.keys():
-            if img_feats_dict[k]:
-                filtered_smiles[k] = smiles_file[k]
+        #print(img_feats_dict.keys())
+        with open(smiles_file, 'r') as f_smiles: 
+            smiles_dict = json.load(f_smiles)
+            filtered_smiles = {}
+            filtered_img_feats = {}
+            for k in smiles_dict.keys():
+                if img_feats_dict[k] is None:
+                    continue
+                filtered_smiles[k] = smiles_dict[k]
                 filtered_img_feats[k] = img_feats_dict[k]
-        assert len(filtered_img_feats.keys()) == len(filtered_smiles.keys())
-        return filtered_img_feats, filtered_smiles
+            assert len(filtered_img_feats.keys()) == len(filtered_smiles.keys())
+            print(f"===There are a total of {len(filtered_img_feats.keys())} examples in the dataset.===")
+            return filtered_img_feats, filtered_smiles
 
 class CaptionTSVDataset(Dataset):
     def __init__(self, yaml_file, tokenizer=None, add_od_labels=True,
@@ -268,12 +282,14 @@ class CaptionTensorizer(object):
             sequence_a_segment_id=0, sequence_b_segment_id=1):
         if self.is_train:
             tokens_a = self.tokenizer.tokenize(text_a)
+            # for i, tok in enumerate(tokens_a):
+            #     if tok is None:
+            #         tokens_a[i] = self.tokenizer.unk_token
         else:
             # fake tokens to generate masks
             tokens_a = [self.tokenizer.mask_token] * (self.max_seq_a_len - 2)
         if len(tokens_a) > self.max_seq_a_len - 2:
             tokens_a = tokens_a[:(self.max_seq_a_len - 2)]
-
         tokens = [self.tokenizer.cls_token] + tokens_a + [self.tokenizer.sep_token]
         segment_ids = [cls_token_segment_id] + [sequence_a_segment_id] * (len(tokens) - 1)
         seq_a_len = len(tokens)
@@ -288,10 +304,10 @@ class CaptionTensorizer(object):
                 tokens_b = tokens_b[: (self.max_seq_len - len(tokens) - 1)]
             tokens += tokens_b + [self.tokenizer.sep_token]
             segment_ids += [sequence_b_segment_id] * (len(tokens_b) + 1)
-
         seq_len = len(tokens)
         if self.is_train:
             masked_pos = torch.zeros(self.max_seq_len, dtype=torch.int)
+            #print(f'token ids before masking: {self.tokenizer.convert_tokens_to_ids(tokens)}')
             # randomly mask words for prediction, ignore [CLS]
             candidate_masked_idx = list(range(1, seq_a_len)) # only mask text_a
             random.shuffle(candidate_masked_idx)
@@ -307,7 +323,8 @@ class CaptionTensorizer(object):
                 elif random.random() <= 0.5:
                     # 10% chance to be a random word ((1-0.8)*0.5)
                     from random import randint
-                    i = randint(0, len(self.tokenizer.vocab))
+                    # i = randint(0, len(self.tokenizer.vocab))
+                    i = randint(0, len(self.tokenizer.vocab) - 1)
                     self.tokenizer._convert_id_to_token(i)
                     tokens[pos] = self.tokenizer._convert_id_to_token(i)
                 else:
@@ -322,27 +339,34 @@ class CaptionTensorizer(object):
             masked_ids = self.tokenizer.convert_tokens_to_ids(masked_token)
         else:
             masked_pos = torch.ones(self.max_seq_len, dtype=torch.int)
-
+            
         # pad on the right for image captioning
         padding_len = self.max_seq_len - seq_len
         tokens = tokens + ([self.tokenizer.pad_token] * padding_len)
         segment_ids += ([pad_token_segment_id] * padding_len)
+        #print(tokens)
+        #try:
         input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
-
+        # except:
+        #     print(text_a)
+        #     print(tokens)
+        #     for tok in tokens:
+        #         print(f"token is {tok}")
+        #         print(f"token id is {self.tokenizer.convert_tokens_to_ids([tok])}.")
         # image features
         img_len = img_feat.shape[0]
         if img_len > self.max_img_seq_len:
-            indice = random.sample(range(img_len), self.max_img_seq_len)
-            indice = torch.tensor(indice)
-            img_feat = img_feat[indice]
-            #img_feat = img_feat[0 : self.max_img_seq_len, ]
+            # indice = random.sample(range(img_len), self.max_img_seq_len)
+            # indice = torch.tensor(indice)
+            # img_feat = img_feat[indice]
+            img_feat = img_feat[0 : self.max_img_seq_len, ]
             img_len = img_feat.shape[0]
             assert img_len == self.max_img_seq_len
         else:
             padding_matrix = torch.zeros((self.max_img_seq_len - img_len,
                                           img_feat.shape[1]))
             img_feat = torch.cat((img_feat, padding_matrix), 0)
-
+        #print(f'token ids after masking: len = {len(input_ids)}, {input_ids}')
         # prepare attention mask:
         # note that there is no attention from caption to image
         # because otherwise it will violate the triangle attention 
@@ -370,6 +394,7 @@ class CaptionTensorizer(object):
 
         if self.is_train:
             masked_ids = torch.tensor(masked_ids, dtype=torch.long)
+            #print(f'token ids after masking: {masked_ids}')
             return (input_ids, attention_mask, segment_ids, img_feat, masked_pos, masked_ids)
         return (input_ids, attention_mask, segment_ids, img_feat, masked_pos)
 
@@ -380,14 +405,19 @@ def build_dataset(yaml_file, tokenizer, args, is_train=True):
         assert op.isfile(yaml_file)
 
     if is_train:
-        return CaptionTSVDataset(yaml_file, tokenizer=tokenizer,
-            add_od_labels=args.add_od_labels, max_img_seq_length=args.max_img_seq_length,
+        # return CaptionTSVDataset(yaml_file, tokenizer=tokenizer,
+        #     add_od_labels=args.add_od_labels, max_img_seq_length=args.max_img_seq_length,
+        #     max_seq_length=args.max_seq_length, max_seq_a_length=args.max_seq_a_length,
+        #     is_train=True, mask_prob=args.mask_prob, max_masked_tokens=args.max_masked_tokens)
+        return SMILESCaptionDataset(yaml_file, tokenizer=tokenizer, add_od_labels=args.add_od_labels, 
+            max_img_seq_length=args.max_img_seq_length,
             max_seq_length=args.max_seq_length, max_seq_a_length=args.max_seq_a_length,
             is_train=True, mask_prob=args.mask_prob, max_masked_tokens=args.max_masked_tokens)
-    if args.use_cbs:
-        dataset_class = CaptionTSVDatasetWithConstraints
-    else:
-        dataset_class = CaptionTSVDataset
+    # if args.use_cbs:
+    #     dataset_class = CaptionTSVDatasetWithConstraints
+    # else:
+    #     dataset_class = CaptionTSVDataset
+    dataset_class = SMILESCaptionDataset
     return dataset_class(yaml_file, tokenizer=tokenizer,
             add_od_labels=args.add_od_labels, max_img_seq_length=args.max_img_seq_length,
             max_seq_length=args.max_seq_length, max_seq_a_length=args.max_gen_length,
@@ -499,12 +529,12 @@ def train(args, train_dataloader, val_dataset, model, tokenizer):
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
 
-    if args.scst:
-        scst_criterion = ScstRewardCriterion(
-            cider_cached_tokens=op.join(args.data_dir, args.cider_cached_tokens),
-            baseline_type=args.sc_baseline_type,
-        )
-        logger.info("  SCST training...")
+    # if args.scst:
+    #     scst_criterion = ScstRewardCriterion(
+    #         cider_cached_tokens=op.join(args.data_dir, args.cider_cached_tokens),
+    #         baseline_type=args.sc_baseline_type,
+    #     )
+    #     logger.info("  SCST training...")
 
 
     global_step, global_loss, global_acc =0,  0.0, 0.0
@@ -521,15 +551,20 @@ def train(args, train_dataloader, val_dataset, model, tokenizer):
                     'token_type_ids': batch[2], 'img_feats': batch[3], 
                     'masked_pos': batch[4], 'masked_ids': batch[5]
                 }
+                # for k in inputs.keys():
+                #     print(f"{k} shape is {inputs[k].shape}")
                 outputs = model(**inputs)
                 loss, logits = outputs[:2]
                 masked_ids = inputs['masked_ids']
-                masked_ids = masked_ids[masked_ids != 0]
+                #masked_ids = masked_ids[masked_ids != 0]
+                masked_ids = masked_ids[masked_ids != 1]
+                #print(f'logits.shape is {logits.shape}')
+                #print(f'masked_ids.shape is {masked_ids.shape}')
                 batch_score = compute_score_with_logits(logits, masked_ids)
                 batch_acc = torch.sum(batch_score.float()) / torch.sum(inputs['masked_pos'])
-            else:
-                loss = scst_train_iter(args, train_dataloader, model, scst_criterion, img_keys, batch, tokenizer)
-                batch_acc = scst_criterion.get_score()
+            # else:
+            #     loss = scst_train_iter(args, train_dataloader, model, scst_criterion, img_keys, batch, tokenizer)
+            #     batch_acc = scst_criterion.get_score()
 
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
@@ -544,7 +579,7 @@ def train(args, train_dataloader, val_dataset, model, tokenizer):
                 model.zero_grad()
                 if global_step % args.logging_steps == 0:
                     logger.info("Epoch: {}, global_step: {}, lr: {:.6f}, loss: {:.4f} ({:.4f}), " \
-                        "score: {:.4f} ({:.4f})".format(epoch, global_step, 
+                        "score: {:.4f}, global score/accu: {:.4f}".format(epoch, global_step, 
                         optimizer.param_groups[0]["lr"], loss, global_loss / global_step, 
                         batch_acc, global_acc / global_step)
                     )
@@ -557,15 +592,20 @@ def train(args, train_dataloader, val_dataset, model, tokenizer):
                         logger.info("Perform evaluation at step: %d" % (global_step))
                         evaluate_file = evaluate(args, val_dataset, model, tokenizer,
                                 checkpoint_dir)
-                        with open(evaluate_file, 'r') as f:
-                            res = json.load(f)
-                        best_score = max(best_score, res['CIDEr'])
-                        res['epoch'] = epoch
-                        res['global_step'] = step
-                        res['best_CIDEr'] = best_score
-                        eval_log.append(res)
-                        with open(args.output_dir + '/eval_logs.json', 'w') as f:
-                            json.dump(eval_log, f)
+                        # with open(evaluate_file, 'r') as f:
+                        #     res = json.load(f)
+                        # best_score = max(best_score, res['CIDEr'])
+                        # res['epoch'] = epoch
+                        # res['global_step'] = step
+                        # res['best_CIDEr'] = best_score
+                        # eval_log.append(res)
+                        # with open(args.output_dir + '/eval_logs.json', 'w') as f:
+                        #     json.dump(eval_log, f)
+        # checkpoint_dir = save_checkpoint(model, tokenizer, args, epoch, global_step) 
+        # # evaluation
+        # if args.evaluate_during_training: 
+        #     logger.info("Perform evaluation at the end of epoch %d" % (epoch))
+        #     evaluate_file = evaluate(args, val_dataset, model, tokenizer, checkpoint_dir)
     return checkpoint_dir
 
 
@@ -672,13 +712,14 @@ def evaluate(args, val_dataloader, model, tokenizer, output_dir):
     if get_world_size() > 1:
         torch.distributed.barrier()
     evaluate_file = get_evaluate_file(predict_file)
-    if is_main_process():
-        caption_file = val_dataloader.dataset.get_caption_file_in_coco_format()
-        data = val_dataloader.dataset.yaml_file.split('/')[-2]
-        if 'nocaps' not in data:
-            result = evaluate_on_coco_caption(predict_file, caption_file, outfile=evaluate_file)
-            logger.info('evaluation result: {}'.format(str(result)))
-            logger.info('evaluation result saved to {}'.format(evaluate_file))
+    # if is_main_process():
+        
+        # caption_file = val_dataloader.dataset.get_caption_file_in_coco_format()
+        # data = val_dataloader.dataset.yaml_file.split('/')[-2]
+        # if 'nocaps' not in data:
+        #     result = evaluate_on_coco_caption(predict_file, caption_file, outfile=evaluate_file)
+        #     logger.info('evaluation result: {}'.format(str(result)))
+        #     logger.info('evaluation result saved to {}'.format(evaluate_file))
     if get_world_size() > 1:
         torch.distributed.barrier()
     return evaluate_file
@@ -720,9 +761,12 @@ def test(args, test_dataloader, model, tokenizer, predict_file):
         inputs_param.update({'use_cbs': True,
             'min_constraints_to_satisfy': args.min_constraints_to_satisfy,
         })
-    def gen_rows():
+    glob_print_counter = 0
+    def gen_rows(counter):
         time_meter = 0
-
+        metric_count = 0
+        jaccard_total = 0.0
+        lv_total = 0
         with torch.no_grad():
             for step, (img_keys, batch) in tqdm(enumerate(test_dataloader)):
                 batch = tuple(t.to(args.device) for t in batch)
@@ -731,11 +775,11 @@ def test(args, test_dataloader, model, tokenizer, predict_file):
                     'token_type_ids': batch[2], 'img_feats': batch[3],
                     'masked_pos': batch[4],
                 }
-                if args.use_cbs:
-                    inputs.update({
-                        'fsm': batch[5],
-                        'num_constraints': batch[6],
-                    })
+                # if args.use_cbs:
+                #     inputs.update({
+                #         'fsm': batch[5],
+                #         'num_constraints': batch[6],
+                #     })
                 inputs.update(inputs_param)
                 tic = time.time()
                 # captions, logprobs
@@ -743,19 +787,43 @@ def test(args, test_dataloader, model, tokenizer, predict_file):
                 time_meter += time.time() - tic
                 all_caps = outputs[0]  # batch_size * num_keep_best * max_len
                 all_confs = torch.exp(outputs[1])
-
+                if step % 100 == 0 and counter != 0:
+                    counter = 0
                 for img_key, caps, confs in zip(img_keys, all_caps, all_confs):
                     res = []
+                    if test_dataloader.dataset.smiles is None:
+                        smiles_dict = None
+                        continue
+                    else:
+                        smiles_dict = test_dataloader.dataset.smiles
+                    if step % 100 == 0 and counter < 5:
+                        print(f"Actual SMILES: {smiles_dict[img_key]}")
                     for cap, conf in zip(caps, confs):
-                        cap = tokenizer.decode(cap.tolist(), skip_special_tokens=True)
-                        res.append({'caption': cap, 'conf': conf.item()})
+                        cap = tokenizer.decode(cap.cpu().tolist(), skip_special_tokens=True)
+                        if smiles_dict is not None:
+                            jaccard_dist = torch.DoubleTensor([textdistance.jaccard(smiles_dict[img_key], cap)]).item()
+                            lv_dist = torch.IntTensor([textdistance.levenshtein(smiles_dict[img_key], cap)]).item()
+                            res.append({'actual SMILES': smiles_dict[img_key], 'predict SMILES': cap, \
+                            'Jaccard index': jaccard_dist, \
+                            'LV Distance': lv_dist, 'conf': conf.item()})
+                            metric_count += 1
+                            jaccard_total += jaccard_dist
+                            lv_total += lv_dist
+                        else:
+                            res.append({'predict SMILES': cap, 'conf': conf.item()})
+                        if step % 100 == 0 and smiles_dict is not None and counter < 5:
+                            evaluate_smiles(cap, smiles_dict[img_key], conf.item())
                     if isinstance(img_key, torch.Tensor):
                         img_key = img_key.item()
                     yield img_key, json.dumps(res)
-
+                    if counter < 5:
+                        print("==========")
+                    counter += 1
+        logger.info("Average Jaccard index during test is {}".format(jaccard_total/metric_count))
+        logger.info("Average Levenshtein distance during test is {}".format(lv_total/metric_count))
         logger.info("Inference model computing time: {} seconds per batch".format(time_meter / (step+1)))
 
-    tsv_writer(gen_rows(), cache_file)
+    tsv_writer(gen_rows(glob_print_counter), cache_file)
     if world_size > 1:
         torch.distributed.barrier()
     if world_size > 1 and is_main_process():
@@ -767,6 +835,24 @@ def test(args, test_dataloader, model, tokenizer, predict_file):
     if world_size > 1:
         torch.distributed.barrier()
 
+def evaluate_smiles(prediction, actual, conf):
+  print(f"Actual len: {len(actual)}, Predicted len: {len(prediction)}")
+  print(f"Predicted SMILES: {prediction}, confidence/perplexity is {conf}")
+  # evaluate using different nlp distances
+  print(f"BLEU score for prediction is {sentence_bleu(prediction, actual)}")
+  print(f"Jaccard index for prediction is {textdistance.jaccard(prediction, actual)}")
+  print(f"Levenshtein distance for prediction is {textdistance.levenshtein(prediction, actual)}")
+  print(f"Levenshtein distance / len(actual) is {textdistance.levenshtein(prediction, actual) / len(actual)}")
+  print(f"Cosine similarity for prediction is {textdistance.cosine(prediction, actual)}")
+  try:
+    predict_mol = Chem.MolFromSmiles(prediction)
+    actual_mol = Chem.MolFromSmiles(actual)
+    fp_predict =  Chem.RDKFingerprint(predict_mol)
+    fp_actual = Chem.RDKFingerprint(actual_mol)
+    print(f"TanimotoSimilarity for prediction is {DataStructs.TanimotoSimilarity(fp_prediction,fp_actual)}")
+    print(f"DiceSimilarity for prediction is {DataStructs.DiceSimilarity(fp_prediction,fp_actual)}")
+  except:
+    pass
 
 def restore_training_settings(args):
     if args.do_train:
@@ -868,13 +954,13 @@ def main():
                         help="Loss function types: support kl, x2, sfmx")
     parser.add_argument("--config_name", default="", type=str, 
                         help="Pretrained config name or path if not the same as model_name.")
-    parser.add_argument("--tokenizer_name", default="seyonec/ChemBERTa-zinc-base-v1", type=str, 
+    parser.add_argument("--tokenizer_name", default="seyonec/PubChem10M_SMILES_BPE_450k", type=str, 
                         help="Pretrained tokenizer name or path if not the same as model_name.")
-    parser.add_argument("--max_seq_length", default=70, type=int,
+    parser.add_argument("--max_seq_length", default=50, type=int,
                         help="The maximum total input sequence length after tokenization. "
                              "Sequences longer than this will be truncated, "
                              "sequences shorter will be padded.")
-    parser.add_argument("--max_seq_a_length", default=40, type=int, 
+    parser.add_argument("--max_seq_a_length", default=50, type=int, 
                         help="The maximum sequence length for caption.")
     parser.add_argument("--do_train", action='store_true', help="Whether to run training.")
     parser.add_argument("--do_test", action='store_true', help="Whether to run inference.")
@@ -904,7 +990,7 @@ def main():
                         help=".")
     parser.add_argument("--drop_worst_after", default=0, type=int, 
                         help=".")
-    parser.add_argument("--per_gpu_train_batch_size", default=64, type=int, 
+    parser.add_argument("--per_gpu_train_batch_size", default=128, type=int, 
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--per_gpu_eval_batch_size", default=64, type=int, 
                         help="Batch size per GPU/CPU for evaluation.")
@@ -935,7 +1021,7 @@ def main():
                         help="For distributed training.")
     parser.add_argument('--seed', type=int, default=88, help="random seed for initialization.")
     # for self-critical sequence training
-    parser.add_argument('--scst', action='store_true', help='Self-critical sequence training')
+    parser.add_argument('--scst', action='store_false', help='Self-critical sequence training')
     parser.add_argument('--sc_train_sample_n', type=int, default=5,
                         help="number of sampled captions for sc training")
     parser.add_argument('--sc_baseline_type', type=str, default='greedy',
@@ -947,7 +1033,7 @@ def main():
     # for generation
     parser.add_argument("--eval_model_dir", type=str, default='', 
                         help="Model directory for evaluation.")
-    parser.add_argument('--max_gen_length', type=int, default=20,
+    parser.add_argument('--max_gen_length', type=int, default=50,
                         help="max length of generated sentences")
     parser.add_argument('--output_hidden_states', action='store_true',
                         help="Turn on for fast decoding")
@@ -992,11 +1078,13 @@ def main():
     args = restore_training_settings(args)
 
     # Load pretrained model and tokenizer
-    config_class, model_class, tokenizer_class = BertConfig, BertForImageCaptioning, BertTokenizer
+    #config_class, model_class, tokenizer_class = BertConfig, BertForImageCaptioning, BertTokenizer
+    config_class, model_class, tokenizer_class = AutoConfig, BertForImageCaptioning, AutoTokenizer
     if args.do_train:
         assert args.model_name_or_path is not None
-        config = config_class.from_pretrained(args.config_name if args.config_name else \
-                args.model_name_or_path, num_labels=args.num_labels, finetuning_task='image_captioning')
+        # config = config_class.from_pretrained(args.config_name if args.config_name else \
+        #         args.model_name_or_path, num_labels=args.num_labels, finetuning_task='image_captioning')
+        config = config_class.from_pretrained(args.model_name_or_path)
         if args.scst:
             # avoid using too much memory
             config.output_hidden_states = True

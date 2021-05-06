@@ -1,0 +1,2 @@
+features: smiles_data/train_img_feats.pt
+smiles: smiles_data/smiles_json_300000.json

@@ -1,5 +1,10 @@
 # Initially taken from Github's Python gitignore file
-
+coco-caption/
+output/
+output_run0/
+output_run1/
+pretrained_model/
+smiles_data/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
