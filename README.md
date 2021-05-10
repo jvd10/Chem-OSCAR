@@ -1,3 +1,9 @@
+# Chem-OSCAR
+This repo adopts the Oscar image captioning model to a image-to-SMILES recognition framework for processing chemical images. It takes in processed image features as input and predicted SMILES as output.
+
+
+
+
 # Oscar: Object-Semantics Aligned Pre-training for Vision-and-Language Tasks    <img src="docs/oscar_logo.png" width="200" align="right"> 
 # VinVL: Revisiting Visual Representations in Vision-Language Models  
 ## Updates
