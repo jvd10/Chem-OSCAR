@@ -40,7 +40,11 @@ class SMILESCaptionDataset(Dataset):
         self.root = op.dirname(yaml_file)
         #self.label_file = find_file_path_in_yaml(self.cfg['label'], self.root)
         self.feat_file = self.cfg['features']
-        self.caption_file = find_file_path_in_yaml(self.cfg.get('smiles'), self.root)
+        try:
+            self.caption_file = find_file_path_in_yaml(self.cfg.get('smiles'), self.root)
+        except:
+            self.caption_file = None
+        self.indexed_key = []
         self.img_feats, self.smiles = self.load_img_feats_and_smiles(self.feat_file, self.caption_file)
         self.tokenizer = tokenizer
         self.tensorizer = CaptionTensorizer(self.tokenizer, max_img_seq_length,
@@ -48,24 +52,33 @@ class SMILESCaptionDataset(Dataset):
                 is_train=is_train)
         self.is_train = is_train
         
-        self.mode = None
-        idx0 = 'train'
-        idx1 = 'val'
-        idx2 = 'test'
-        for i in [idx0, idx1, idx2]:
-            tr = f'{i}_0.png'
-            if tr in self.smiles.keys():
-                self.mode = i
-                break
+        if self.smiles:
+            self.mode = None
+            idx0 = 'train'
+            idx1 = 'val'
+            idx2 = 'test'
+            for i in [idx0, idx1, idx2]:
+                tr = f'{i}_0.png'
+                if tr in self.smiles.keys():
+                    self.mode = i
+                    break
         
 
     def __getitem__(self, idx):
-        caption_idx = f'{self.mode}_{idx}.png'
-        caption = self.smiles[caption_idx]
-        features = torch.tensor(self.img_feats[caption_idx])
-        od_labels = None
-        example = self.tensorizer.tensorize_example(caption, features, text_b=od_labels)
-        return caption_idx, example
+        if self.smiles is None:
+            caption_idx = self.indexed_key[idx]
+            caption = ""
+            features = torch.tensor(self.img_feats[caption_idx])
+            od_labels = None
+            example = self.tensorizer.tensorize_example(caption, features, text_b=od_labels)
+            return caption_idx, example
+        else:
+            caption_idx = f'{self.mode}_{idx}.png'
+            caption = self.smiles[caption_idx]
+            features = torch.tensor(self.img_feats[caption_idx])
+            od_labels = None
+            example = self.tensorizer.tensorize_example(caption, features, text_b=od_labels)
+            return caption_idx, example
 
     def __len__(self):
         return len(self.img_feats.keys())
@@ -73,18 +86,23 @@ class SMILESCaptionDataset(Dataset):
     def load_img_feats_and_smiles(self, feat_file, smiles_file):
         img_feats_dict = torch.load(feat_file)
         #print(img_feats_dict.keys())
-        with open(smiles_file, 'r') as f_smiles: 
-            smiles_dict = json.load(f_smiles)
-            filtered_smiles = {}
-            filtered_img_feats = {}
-            for k in smiles_dict.keys():
-                if img_feats_dict[k] is None:
-                    continue
-                filtered_smiles[k] = smiles_dict[k]
-                filtered_img_feats[k] = img_feats_dict[k]
-            assert len(filtered_img_feats.keys()) == len(filtered_smiles.keys())
-            print(f"===There are a total of {len(filtered_img_feats.keys())} examples in the dataset.===")
-            return filtered_img_feats, filtered_smiles
+        if smiles_file is None:
+            for k in img_feats_dict:
+                self.indexed_key.append(k)
+            return img_feats_dict, None
+        else:
+            with open(smiles_file, 'r') as f_smiles: 
+                smiles_dict = json.load(f_smiles)
+                filtered_smiles = {}
+                filtered_img_feats = {}
+                for k in smiles_dict.keys():
+                    if img_feats_dict[k] is None:
+                        continue
+                    filtered_smiles[k] = smiles_dict[k]
+                    filtered_img_feats[k] = img_feats_dict[k]
+                assert len(filtered_img_feats.keys()) == len(filtered_smiles.keys())
+                print(f"===There are a total of {len(filtered_img_feats.keys())} examples in the dataset.===")
+                return filtered_img_feats, filtered_smiles
 
 class CaptionTSVDataset(Dataset):
     def __init__(self, yaml_file, tokenizer=None, add_od_labels=True,
@@ -396,6 +414,7 @@ class CaptionTensorizer(object):
             masked_ids = torch.tensor(masked_ids, dtype=torch.long)
             #print(f'token ids after masking: {masked_ids}')
             return (input_ids, attention_mask, segment_ids, img_feat, masked_pos, masked_ids)
+        #print((input_ids, attention_mask, segment_ids, img_feat, masked_pos))
         return (input_ids, attention_mask, segment_ids, img_feat, masked_pos)
 
 
@@ -768,7 +787,10 @@ def test(args, test_dataloader, model, tokenizer, predict_file):
         jaccard_total = 0.0
         lv_total = 0
         with torch.no_grad():
+            #print(next(iter(test_dataloader)))
             for step, (img_keys, batch) in tqdm(enumerate(test_dataloader)):
+            #for step, (img_keys, batch) in enumerate(test_dataloader):
+                #print(batch)
                 batch = tuple(t.to(args.device) for t in batch)
                 inputs = {
                     'input_ids': batch[0], 'attention_mask': batch[1],
@@ -790,14 +812,18 @@ def test(args, test_dataloader, model, tokenizer, predict_file):
                 if step % 100 == 0 and counter != 0:
                     counter = 0
                 for img_key, caps, confs in zip(img_keys, all_caps, all_confs):
+                    # print(img_key)
                     res = []
                     if test_dataloader.dataset.smiles is None:
                         smiles_dict = None
-                        continue
                     else:
                         smiles_dict = test_dataloader.dataset.smiles
-                    if step % 100 == 0 and counter < 5:
-                        print(f"Actual SMILES: {smiles_dict[img_key]}")
+                    if smiles_dict is not None:
+                        if step % 100 == 0 and counter < 5:
+                            print(f"Actual SMILES: {smiles_dict[img_key]}")
+                    # print(img_key)
+                    # print(caps)
+                    # print(confs)
                     for cap, conf in zip(caps, confs):
                         cap = tokenizer.decode(cap.cpu().tolist(), skip_special_tokens=True)
                         if smiles_dict is not None:
@@ -809,18 +835,19 @@ def test(args, test_dataloader, model, tokenizer, predict_file):
                             metric_count += 1
                             jaccard_total += jaccard_dist
                             lv_total += lv_dist
+                            if step % 100 == 0 and smiles_dict is not None and counter < 5:
+                                evaluate_smiles(cap, smiles_dict[img_key], conf.item())
                         else:
                             res.append({'predict SMILES': cap, 'conf': conf.item()})
-                        if step % 100 == 0 and smiles_dict is not None and counter < 5:
-                            evaluate_smiles(cap, smiles_dict[img_key], conf.item())
                     if isinstance(img_key, torch.Tensor):
                         img_key = img_key.item()
                     yield img_key, json.dumps(res)
                     if counter < 5:
                         print("==========")
                     counter += 1
-        logger.info("Average Jaccard index during test is {}".format(jaccard_total/metric_count))
-        logger.info("Average Levenshtein distance during test is {}".format(lv_total/metric_count))
+        if metric_count > 0:
+            logger.info("Average Jaccard index during test is {}".format(jaccard_total/metric_count))
+            logger.info("Average Levenshtein distance during test is {}".format(lv_total/metric_count))
         logger.info("Inference model computing time: {} seconds per batch".format(time_meter / (step+1)))
 
     tsv_writer(gen_rows(glob_print_counter), cache_file)
@@ -964,7 +991,7 @@ def main():
                         help="The maximum sequence length for caption.")
     parser.add_argument("--do_train", action='store_true', help="Whether to run training.")
     parser.add_argument("--do_test", action='store_true', help="Whether to run inference.")
-    parser.add_argument("--do_eval", action='store_true', help="Whether to run evaluation.")
+    parser.add_argument("--do_eval", action='store_true', help="Whether to run eval.")
     parser.add_argument("--do_lower_case", action='store_true', 
                         help="Set this flag if you are using an uncased model.")
     parser.add_argument("--mask_prob", default=0.15, type=float,
