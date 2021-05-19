@@ -1,12 +1,14 @@
 # Chem-OSCAR
 This repo adopts the Oscar image captioning model to a image-to-SMILES recognition framework for processing chemical images. It takes in processed image features as input and predicted SMILES as output.
 
+## Installation
+Check the "Original OSCAR Repo README" section for Installation instructions.
 
 
-
-## Oscar: Object-Semantics Aligned Pre-training for Vision-and-Language Tasks    <img src="docs/oscar_logo.png" width="200" align="right"> 
-## VinVL: Revisiting Visual Representations in Vision-Language Models  
-### Updates
+## Original OSCAR Repo README
+### Oscar: Object-Semantics Aligned Pre-training for Vision-and-Language Tasks    <img src="docs/oscar_logo.png" width="200" align="right"> 
+### VinVL: Revisiting Visual Representations in Vision-Language Models  
+#### Updates
 05/28/2020: Released finetuned models on downstream tasks, please check [MODEL_ZOO.md](MODEL_ZOO.md). <br/>
 05/15/2020: Released pretrained models, datasets, and code for downstream tasks finetuning. <br/>
 01/13/2021: our new work [VinVL](https://arxiv.org/abs/2101.00529) proposed OSCAR+, an improved version of OSCAR, and provided a better object-attribute detection model to extract features for V+L tasks. The VinVL work achieved SOTA performance on all seven V+L tasks here. Please stay tuned for the model and code release. <br/>
@@ -14,14 +16,14 @@ This repo adopts the Oscar image captioning model to a image-to-SMILES recogniti
 04/13/2021: Our [Scene Graph Benchmark Repo](https://github.com/microsoft/scene_graph_benchmark) has been released. Welcome to use the code there to extract image features with VinVL pretrained models. <br/>
 
 
-### Introduction
+#### Introduction
 This repository contains source code necessary to reproduce the results presented in the paper [Oscar: Object-Semantics Aligned Pre-training for Vision-Language Tasks](https://arxiv.org/abs/2004.06165).
 We propose a new cross-modal pre-training method **Oscar** (Object-Semantics Aligned Pre-training). It leverages **object tags** detected in images as anchor points to significantly ease the learning of image-text alignments. We pre-train Oscar on the public corpus of 6.5 million text-image pairs, and fine-tune it on downstream tasks, creating new state-of-the-arts on six well-established vision-language understanding and generation tasks. For more on this project, see the [Microsoft Research Blog post](https://www.microsoft.com/en-us/research/blog/objects-are-the-secret-key-to-revealing-the-world-between-vision-and-language/).
 
 
 <img src="docs/oscar.PNG" width="650"> 
 
-### Performance
+#### Performance
 Task    | t2i | t2i | i2t | i2t | IC  | IC  |  IC  |  IC  | NoCaps | NoCaps |   VQA    |  NLVR2  |   GQA   |
 --------|-----|-----|-----|-----|-----|-----|------|------|--------|--------|----------|---------|---------|
 Metric	| R@1 | R@5 | R@1 | R@5 | B@4 |  M  |  C   |   S  |    C   |    S   | test-std | test-P  | test-std|
@@ -39,21 +41,21 @@ gain    | 1.3 |  0.7| 1.9 |  0.6| -0.7| 0.5 | 0.9  | 0.7  |    5.9 |  0.7   |   
 t2i: text-to-image retrieval; i2t: image-to-text retrieval; IC: image captioning on COCO. 
 
 
-### Download
+#### Download
 We released pre-trained models, datasets, VinVL image features, and Oscar+ pretraining corpus for downstream tasks. 
 Please check [VinVL_DOWNLOAD.md](VinVL_DOWNLOAD.md) for details. 
 
 To download checkpoints for the Vanilla OSCAR, please check [DOWNLOAD.md](DOWNLOAD.md) for details. 
 
-### Installation
+#### Installation
 Check [INSTALL.md](INSTALL.md) for installation instructions.
 
-### Model Zoo
+#### Model Zoo
 Check [MODEL_ZOO.md](MODEL_ZOO.md) for scripts to run oscar downstream finetuning.
 
 Check [VinVL_MODEL_ZOO.md](VinVL_MODEL_ZOO.md) for scripts to run oscar+ pretraining and downstream finetuning.
 
-### Citations
+#### Citations
 Please consider citing this paper if you use the code:
 ```
 @article{li2020oscar,
@@ -71,6 +73,6 @@ Please consider citing this paper if you use the code:
 }
 ```
 
-### License
+#### License
 Oscar is released under the MIT license. See [LICENSE](LICENSE) for details. 
 
