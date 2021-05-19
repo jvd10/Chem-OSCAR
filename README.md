@@ -3,8 +3,32 @@ This repo adopts the Oscar image captioning model to a image-to-SMILES recogniti
 
 ## Installation
 Check the "Original OSCAR Repo README" section for Installation instructions.
+Additionally, do the following:
+```bash
+pip install transformers
+pip install pytorch-transformers
+pip install textdistance
+pip install nltk
+time conda install -q -y -c conda-forge rdkit=2020.09.2 
+```
+## Trained Model
+There is a trained model ready to use in the output_run3/checkpoint-69-82040 folder that was trained with the following parameters and hyperparameters:
+- 300,000 images in the form of image feature vectors with dimension [50,1024] each generated from Chem-Detectron2
+- learning rate 0.00003
+- batch size 256
+- epochs 70
+- num_beams 5
 
+## Training and Running Chem-OSCAR
+To train the Chem-OSCAR using the image captioning task, do the following:
+```python
+python oscar/run_captioning.py --model_name_or_path seyonec/PubChem10M_SMILES_BPE_450k --train_yaml smiles_train.yaml --val_yaml smiles_val.yaml --do_train --evaluate_during_training --learning_rate 0.00003 --per_gpu_train_batch_size 256 --num_train_epochs 70 --save_steps 5000 --output_dir output --scst --seed 11699 --num_beams 5
+```
 
+To generate the predicted SMILES, do the following:
+```python
+python oscar/run_captioning.py --eval_model_dir output_run3/checkpoint-69-82040 --test_yaml demo_test.yaml  --do_test --learning_rate 0.00003 --per_gpu_train_batch_size 256 --num_train_epochs 70 --save_steps 5000 --output_dir output --scst --num_beams 5 --num_keep_best 1
+```
 ## Original OSCAR Repo README
 ### Oscar: Object-Semantics Aligned Pre-training for Vision-and-Language Tasks    <img src="docs/oscar_logo.png" width="200" align="right"> 
 ### VinVL: Revisiting Visual Representations in Vision-Language Models  
